@@ -3,6 +3,32 @@ from typing import Literal
 from ollama import chat
 
 
+def get_weather(
+    latitude: float, longitude: float, unit: Literal["celsius", "fahrenheit"]
+) -> float:
+    """Get the current air temperature at a location.
+
+    Args:
+        latitude: Latitude of the location in decimal degrees, e.g. 4.39 for Miri
+        longitude: Longitude of the location in decimal degrees, e.g. 113.99 for Miri
+        unit: Temperature unit to return, "celsius" or "fahrenheit". Defaults to "celsius".
+
+    Returns:
+        The current air temperature 2 meters above ground, in the requested unit.
+    """
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": "temperature_2m",
+        "temperature_unit": unit,
+    }
+    response = httpx.get(url, params=params)
+    response.raise_for_status()
+    data = response.json()
+    return data["current"]["temperature_2m"]
+
+
 # Literal 只会是其中的这几个
 def calculate(a: float, b: float, operator: Literal["+", "-", "*", "/"]) -> float:
     """Do one basic arithmetic operation on two numbers.
@@ -29,30 +55,6 @@ def calculate(a: float, b: float, operator: Literal["+", "-", "*", "/"]) -> floa
         return a / b
     raise ValueError(f"Unknown operator: {operator}")
 
-
-def get_weather(latitude: float, longitude: float) -> float:
-    """Get the current air temperrature at a location
-
-    Args:
-        latitude: Latitude of the location in decimal degrees, e.g. 4.39 for Miri
-        longitude: Longitude of the location in decimal degrees, e.g. 113.99 for Miri.
-
-    Returns:
-        The current air temperature 2 meters above ground, in degrees Celsius
-    """
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "current": "temperature_2m",
-    }
-    response = httpx.get(url, params=params)
-    response.raise_for_status()
-    # if the api return the error the program will down
-    data = response.json()
-    return data["current"]["temperature_2m"]
-
-
 available_tools = {
     "get_weather": get_weather,
     "calculate": calculate,
@@ -61,8 +63,16 @@ available_tools = {
 
 def main():
     messages = [
-        {"role":"system","content":"""你是查天气的助手可以调用get_weather和calculate两个工具。get_weather的回传单位是Celsius。如果用户要求fahrenheit的时候你
-        需要调用calculate工具来计算，只要包含到需要计算的部分一切调用calculate工具来计算, Celsius -> fahrenheit  的公式是 fahrenheit = celsius * 9 / 5 + 32"""},
+        {
+            "role": "system",
+            "content": (
+                "你是查天气的助手，可以调用 get_weather 和1 calculate 两个工具。"
+                "get_weather可以用unit参数直接回传celsius 或 fahrenheit"
+                '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。'
+                "其他数学计算一律使用 calculate 工具"
+                "回答时要注明单位，用纯文字回答，不要用LaTex"
+            ),
+        },
         {"role": "user", "content": "What is temperature in Miri in Fahrenheit?"},
     ]
     tools = [get_weather, calculate]
@@ -89,13 +99,7 @@ def main():
                     result = f"Error: {e}"
 
             print(f"[tool] {name}({call.function.arguments}) -> {result}")
-            messages.append(
-                {
-                    "role":"tool",
-                    "content":str(result),
-                    "tool_name":name
-                }
-            )
+            messages.append({"role": "tool", "content": str(result), "tool_name": name})
 
     print("Stopped: reached max steps")
 
