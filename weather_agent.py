@@ -61,41 +61,43 @@ available_tools = {
 
 def main():
     messages = [
-        {"role": "user", "content": "What is 12.5 times 8?"},
+        {"role":"system","content":"""你是查天气的助手可以调用get_weather和calculate两个工具。get_weather的回传单位是Celsius。如果用户要求fahrenheit的时候你
+        需要调用calculate工具来计算，只要包含到需要计算的部分一切调用calculate工具来计算, Celsius -> fahrenheit  的公式是 fahrenheit = celsius * 9 / 5 + 32"""},
+        {"role": "user", "content": "What is temperature in Miri in Fahrenheit?"},
     ]
-    response = chat(
-        model="qwen3:8b",
-        messages=messages,
-        tools=[get_weather, calculate],
-    )
-    if not response.message.tool_calls:
-        print(f"answer: {response.message.content}")
-        return
-    print("first:", response.message)
-    messages.append(response.message)
+    tools = [get_weather, calculate]
 
-    for call in response.message.tool_calls or []:
-        name = call.function.name
-        function = available_tools.get(name)
+    for step in range(10):
+        print(f"--- step {step+1} ---")
+        response = chat(model="qwen3:8b", messages=messages, tools=tools)
+        messages.append(response.message)
 
-        if function is None:
-            result = f"Error: unknown tool '{name}'"
-        else:
-            try:
-                result = function(**call.function.arguments)
-            except Exception as e:
-                result = f"Error: {e}"
+        if not response.message.tool_calls:
+            print("answer:", response.message.content)
+            return
 
-        print(f"[tool] {name}({call.function.arguments}) -> {result}")
-        messages.append(
-            {
-                "role": "tool",
-                "content": str(result),
-                "tool_name": name,
-            }
-        )
-    final = chat(model="qwen3:8b", messages=messages, tools=[get_weather, calculate])
-    print("answer:", final.message.content)
+        for call in response.message.tool_calls:
+            name = call.function.name
+            function = available_tools.get(name)
+
+            if function is None:
+                result = f"Error: unknown tool '{name}'"
+            else:
+                try:
+                    result = function(**call.function.arguments)
+                except Exception as e:
+                    result = f"Error: {e}"
+
+            print(f"[tool] {name}({call.function.arguments}) -> {result}")
+            messages.append(
+                {
+                    "role":"tool",
+                    "content":str(result),
+                    "tool_name":name
+                }
+            )
+
+    print("Stopped: reached max steps")
 
 
 if __name__ == "__main__":
