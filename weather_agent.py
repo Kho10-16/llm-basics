@@ -1,7 +1,28 @@
 import httpx
 from typing import Literal
 from ollama import chat
+from pathlib import Path
 
+SANDBOX = Path("sandbox").resolve()
+# resolve() 会把相对路径变成完整的真实路劲
+
+def read_file(filename:str) -> str:
+    """Read a text file from the sandbox folder.
+
+    Args:
+        filename: Name of the file inside the sandbox folder, e.g. "notes.txt"
+
+    Returns:
+        The full text content of the file.
+    """
+    path = (SANDBOX / filename).resolve()
+    if not path.is_relative_to(SANDBOX):
+        # is_relative_to(SANDBOX) 检查最终路径是否还在沙盒里面
+        raise PermissionError(f"Access denies: '{filename}' is outside the sandbox folder")
+    if not path.is_file():
+        # is_file() 文件不存在，或者是文件夹而不是文件
+        raise FileNotFoundError(f"File not found: '{filename}'")
+    return path.read_text(encoding="utf-8")
 
 def get_weather(
     latitude: float, longitude: float, unit: Literal["celsius", "fahrenheit"]
@@ -58,6 +79,7 @@ def calculate(a: float, b: float, operator: Literal["+", "-", "*", "/"]) -> floa
 available_tools = {
     "get_weather": get_weather,
     "calculate": calculate,
+    "read_file": read_file,
 }
 
 
@@ -66,16 +88,16 @@ def main():
         {
             "role": "system",
             "content": (
-                "你是查天气的助手，可以调用 get_weather 和1 calculate 两个工具。"
+                "你是查天气的助手，可以调用 get_weather 和1 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具"
                 "get_weather可以用unit参数直接回传celsius 或 fahrenheit"
                 '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。'
                 "其他数学计算一律使用 calculate 工具"
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content": "What is temperature in Miri in Fahrenheit?"},
+        {"role": "user", "content": "What is written in notes.txt?"},
     ]
-    tools = [get_weather, calculate]
+    tools = [get_weather, calculate, read_file]
 
     for step in range(10):
         print(f"--- step {step+1} ---")
@@ -102,7 +124,6 @@ def main():
             messages.append({"role": "tool", "content": str(result), "tool_name": name})
 
     print("Stopped: reached max steps")
-
 
 if __name__ == "__main__":
     main()
