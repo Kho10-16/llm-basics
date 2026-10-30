@@ -11,6 +11,19 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
 MAX_STEPS = 10
+KEEP_TOOL_RESULTS = 2
+
+def clear_old_tool_results(messages):
+    last_model_index = -1
+    for i, m in enumerate(messages):
+        # enumurate = 他会同时给我第几个（i）和那个东西（m）
+        if not isinstance(m, dict):
+            last_model_index = i
+
+    for i in range(last_model_index):
+        m = messages[i]
+        if isinstance(m, dict) and m['role'] == 'tool':
+            m['content'] = '[cleared: old tool result. Call the tool again if you need it.]'
 
 def chat_with_retry(messages, tools):
     for attempt in range(MAX_RETRIES):
@@ -134,7 +147,7 @@ def main():
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content": "古晋现在的天气"},
+        {"role": "user", "content": "Read big.txt and tell me which animal is mentioned first. Then tell me the temperature in Miri in Celsius and Fahrenheit."},
     ]
     tools = [get_weather, calculate, read_file]
 
@@ -142,8 +155,11 @@ def main():
     while step < MAX_STEPS:
         step += 1    
         print(f"--- step {step} ---")
+        clear_old_tool_results(messages)
         response = chat_with_retry(messages, tools)
         messages.append(response.message)
+        print(f"[context] input tokens: {response.prompt_eval_count}")
+        # prompt_eval_count = 这一步送进模型的input token数量
 
         if not response.message.tool_calls:
             print("answer:", response.message.content)
@@ -161,7 +177,7 @@ def main():
                 except Exception as e:
                     result = f"Error: {e}"
 
-            print(f"[tool] {name}({call.function.arguments}) -> {result}")
+            print(f"[tool] {name}({call.function.arguments}) -> {str(result)[:100]}")
             messages.append({"role": "tool", "content": str(result), "tool_name": name})
 
     print("Stopped: reached max steps")
