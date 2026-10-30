@@ -5,6 +5,7 @@ from pathlib import Path
 
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
+MAX_STEPS = 10
 
 def read_file(filename:str) -> str:
     """Read a text file from the sandbox folder.
@@ -18,7 +19,7 @@ def read_file(filename:str) -> str:
     path = (SANDBOX / filename).resolve()
     if not path.is_relative_to(SANDBOX):
         # is_relative_to(SANDBOX) 检查最终路径是否还在沙盒里面
-        raise PermissionError(f"Access denies: '{filename}' is outside the sandbox folder")
+        raise PermissionError(f"Access denied: '{filename}' is outside the sandbox folder")
     if not path.is_file():
         # is_file() 文件不存在，或者是文件夹而不是文件
         raise FileNotFoundError(f"File not found: '{filename}'")
@@ -58,7 +59,7 @@ def calculate(a: float, b: float, operator: Literal["+", "-", "*", "/"]) -> floa
 
     Args:
         a: The first number.
-        b: The second number,
+        b: The second number.
         operator: The operation to apply: "+", "-","*", or "/".
 
     Returns:
@@ -88,10 +89,10 @@ def main():
         {
             "role": "system",
             "content": (
-                "你是查天气的助手，可以调用 get_weather 和1 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具"
-                "get_weather可以用unit参数直接回传celsius 或 fahrenheit"
-                '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。'
-                "其他数学计算一律使用 calculate 工具"
+                "你是查天气的助手，可以调用 get_weather 和 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具\n"
+                "get_weather可以用unit参数直接回传celsius 或 fahrenheit\n"
+                '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。\n'
+                "其他数学计算一律使用 calculate 工具\n"
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
@@ -99,8 +100,10 @@ def main():
     ]
     tools = [get_weather, calculate, read_file]
 
-    for step in range(10):
-        print(f"--- step {step+1} ---")
+    step = 0
+    while step < MAX_STEPS:
+        step += 1    
+        print(f"--- step {step} ---")
         response = chat(model="qwen3:8b", messages=messages, tools=tools)
         messages.append(response.message)
 
