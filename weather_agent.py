@@ -4,6 +4,9 @@ from ollama import chat
 from pathlib import Path
 import time
 import random
+import shlex
+import subprocess
+import sys
 
 MAX_RETRIES = 3
 RETRY_STATUS = {429, 500, 502, 503, 504}
@@ -11,8 +14,77 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
 MAX_STEPS = 10
-NEEDS_APPROVAL = {"write_file", "edit_file"}
+NEEDS_APPROVAL = {"write_file", "edit_file", "run_command"}
 READ_FILES = set()
+ALLOWED_COMMANDS = {"python"}
+MAX_OUTPUT_CHARS = 2000
+COMMAND_TIMEOUT = 10
+
+def run_command(command:str) -> str:
+    """Run a python command inside the sandbox folder and return its output.
+
+    Only "python" is allowed, e.g. "python hello.py".
+    Use "/" in paths, never "\\". Do not run programs that wait for keyboard input.
+    Commands are stopped after 10 seconds.
+
+    Args:
+        command: The command to run, e.g. "python hello.py"
+
+    Returns:
+        The exit code followed by the program's output and error messages.
+        Exit code 0 means the program finished without errors.
+    """
+    parts = check_command(command)
+
+    if parts[0] == 'python':
+        parts[0] = sys.executable
+
+    try:
+        result = subprocess.run(
+            parts,
+            cwd=SANDBOX,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=COMMAND_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(
+            f"Command did not finish within {COMMAND_TIMEOUT} seconds and was stopped."
+            " Check for infinite loops or code that waits for input"
+        )
+
+    output = result.stdout + result.stderr
+
+    if len(output) > MAX_OUTPUT_CHARS:
+        output = output[:MAX_OUTPUT_CHARS] + f"\n... output truncated ({len(output)} characters total)"
+
+    return f"exit code: {result.returncode}\n{output}"
+
+def check_command(command:str) -> list[str]:
+    """Check a command before runnint it. Raise if it is not allowed.
+
+    Returns:
+        The command split into parts, e.g. ["python", "hello.py"].
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        raise ValueError(f"Could not parse command: {command!r}. Check that quotes are closed")
+
+    # empty string or only space
+    if not parts:
+        raise ValueError("Empty command")
+
+    program = parts[0]
+    if program not in ALLOWED_COMMANDS:
+        raise ValueError(
+            f"Command '{program}' is not allowed."
+            f" Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}"
+        )
+
+    return parts
 
 def ask_human(name, arguments) -> bool:
     print(f"\n[approval] The agent wants to run: {name}({arguments})")
@@ -199,7 +271,7 @@ def check_edit(filename: str, old_str: str, new_str: str) -> Path:
         )
 
     if old_str == "":
-        raise ValueError("old_str cannot be empty. To write a whole file, use wrtie_file instead")
+        raise ValueError("old_str cannot be empty. To write a whole file, use write_file instead")
 
     count = path.read_text(encoding="utf-8").count(old_str)
     if count == 0:
@@ -240,10 +312,12 @@ available_tools = {
     "write_file": write_file,
     "list_files":list_files,
     "edit_file":edit_file,
+    "run_command":run_command,
 }
 
 PRECHECKS = {
     "edit_file": check_edit,
+    "run_command": check_command,
 }
 
 def main():
@@ -251,8 +325,7 @@ def main():
         {
             "role": "system",
             "content": (
-                "你是查天气的助手，可以调用 get_weather 和 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具\n"
-                "你现在还可以调用write_file来写文件还有list_files来查看文件夹里面有什么文件\n"
+                "你是一个私人的coding小助手，你可以在sandbox里看，读，写，改文件并用 run_command 跑python\n"
                 "你还可以修改文件内容使用 edit_file 工具不过在edit_file之前你必须调用read_file先。只有在要写整个新文件才用write_file\n"
                 "get_weather可以用unit参数直接回传celsius 或 fahrenheit\n"
                 '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。\n'
@@ -260,9 +333,9 @@ def main():
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content":"In my notes, change eggs to bread"},
+        {"role": "user", "content":"Run buggy.py. If there is an error, fix it, then run it again to confirm it works."},
     ]
-    tools = [get_weather, calculate, read_file, write_file,list_files,edit_file]
+    tools = [get_weather, calculate, read_file, write_file,list_files,edit_file, run_command]
 
     step = 0
     while step < MAX_STEPS:
