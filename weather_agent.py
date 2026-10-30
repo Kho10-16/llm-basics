@@ -11,7 +11,12 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
 MAX_STEPS = 10
-KEEP_TOOL_RESULTS = 2
+NEEDS_APPROVAL = {"write_file"}
+
+def ask_human(name, arguments) -> bool:
+    print(f"\n[approval] The agent wants to run: {name}({arguments})")
+    answer = input("Allow? (y/n): ").strip().lower()
+    return answer == 'y'
 
 def clear_old_tool_results(messages):
     last_model_index = -1
@@ -36,6 +41,22 @@ def chat_with_retry(messages, tools):
             # random.uniform(0,1) = jitter （随机 0-1秒）
             print(f"[retry] {e} -> waiting {delay:.1f}s")
             time.sleep(delay)
+
+def write_file(filename:str, content:str) -> str:
+    """Write text to a file in the sandbox folder. Overwrites the file if it already exists
+
+    Args:
+        filename: Name of the file inside the sandbox folder, e.g. "notes.txt"
+        content: The text to write into the file
+
+    Returns:
+        A confirmation message
+    """
+    path = (SANDBOX / filename).resolve()
+    if not path.is_relative_to(SANDBOX):
+        raise PermissionError(f"Access denied: '{filename}' is outside the sandbox folder")
+    path.write_text(content, encoding="utf-8")
+    return f"Wrote {len(content)} characters to '{filename}'"
 
 def read_file(filename:str) -> str:
     """Read a text file from the sandbox folder.
@@ -132,6 +153,7 @@ available_tools = {
     "get_weather": get_weather,
     "calculate": calculate,
     "read_file": read_file,
+    "write_file": write_file,
 }
 
 
@@ -141,15 +163,16 @@ def main():
             "role": "system",
             "content": (
                 "你是查天气的助手，可以调用 get_weather 和 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具\n"
+                "你现在还可以调用write_file来写文件"
                 "get_weather可以用unit参数直接回传celsius 或 fahrenheit\n"
                 '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。\n'
                 "其他数学计算一律使用 calculate 工具\n"
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content": "Read big.txt and tell me which animal is mentioned first. Then tell me the temperature in Miri in Celsius and Fahrenheit."},
+        {"role": "user", "content":"Write the text 'hello from my agent' into a file called hello.txt"},
     ]
-    tools = [get_weather, calculate, read_file]
+    tools = [get_weather, calculate, read_file, write_file]
 
     step = 0
     while step < MAX_STEPS:
@@ -171,6 +194,8 @@ def main():
 
             if function is None:
                 result = f"Error: unknown tool '{name}'"
+            elif name in NEEDS_APPROVAL and not ask_human(name, call.function.arguments):
+                result = "Error: the user denied this action. Do not retry it. Ask the user what they want instead."
             else:
                 try:
                     result = function(**call.function.arguments)
