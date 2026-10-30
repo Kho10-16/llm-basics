@@ -149,11 +149,41 @@ def calculate(a: float, b: float, operator: Literal["+", "-", "*", "/"]) -> floa
         return a / b
     raise ValueError(f"Unknown operator: {operator}")
 
+def list_files(path:str = ".") -> str:
+    """List files and folders inside the sandbox folder.
+    
+    Args:
+        path: a folder inside sandbox, "." means the sandbox root
+
+    Returns:
+        One item per line. Folder names end with "/"
+    """
+    target = (SANDBOX / path).resolve()
+
+    if not target.is_relative_to(SANDBOX.resolve()):
+        raise ValueError(f"Access denied: '{path}' is outside the sandbox")
+
+    if not target.is_dir():
+        raise ValueError(f"Not a folder: '{path}'")
+
+    items = []
+    for item in sorted(target.iterdir()):
+        if item.is_dir():
+            items.append(f"{item.name}/")
+        else:
+            items.append(item.name)
+
+    if not items:
+        return "(empty folder)"
+
+    return "\n".join(items)
+
 available_tools = {
     "get_weather": get_weather,
     "calculate": calculate,
     "read_file": read_file,
     "write_file": write_file,
+    "list_files":list_files,
 }
 
 
@@ -163,16 +193,16 @@ def main():
             "role": "system",
             "content": (
                 "你是查天气的助手，可以调用 get_weather 和 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具\n"
-                "你现在还可以调用write_file来写文件"
+                "你现在还可以调用write_file来写文件还有list_files来查看文件夹里面有什么文件\n"
                 "get_weather可以用unit参数直接回传celsius 或 fahrenheit\n"
                 '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。\n'
                 "其他数学计算一律使用 calculate 工具\n"
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content":"Write the text 'hello from my agent' into a file called hello.txt"},
+        {"role": "user", "content":"What's in my notes file?"},
     ]
-    tools = [get_weather, calculate, read_file, write_file]
+    tools = [get_weather, calculate, read_file, write_file,list_files]
 
     step = 0
     while step < MAX_STEPS:
