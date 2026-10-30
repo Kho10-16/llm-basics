@@ -11,7 +11,8 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
 MAX_STEPS = 10
-NEEDS_APPROVAL = {"write_file"}
+NEEDS_APPROVAL = {"write_file", "edit_file"}
+READ_FILES = set()
 
 def ask_human(name, arguments) -> bool:
     print(f"\n[approval] The agent wants to run: {name}({arguments})")
@@ -74,7 +75,9 @@ def read_file(filename:str) -> str:
     if not path.is_file():
         # is_file() 文件不存在，或者是文件夹而不是文件
         raise FileNotFoundError(f"File not found: '{filename}'")
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    READ_FILES.add(path)
+    return text
 
 def get_weather(
     latitude: float, longitude: float, unit: Literal["celsius", "fahrenheit"]
@@ -178,14 +181,70 @@ def list_files(path:str = ".") -> str:
 
     return "\n".join(items)
 
+def check_edit(filename: str, old_str: str, new_str: str) -> Path:
+    """Run every edit_file check. Raise if the edit cannot successd.
+    Returns the resolved path so edit_file doew not need to resolve it
+    """
+    path = (SANDBOX / filename).resolve()
+    if not path.is_relative_to(SANDBOX):
+        raise PermissionError(f"Access denieed: '{filename}' is outside the sandbox folder")
+
+    if not path.is_file():
+        raise FileNotFoundError(f"File not found: '{filename}'")
+
+    if path not in READ_FILES:
+        raise ValueError(
+            f"You must read '{filename}' with read_file before editing it."
+            " Call read_file first, then try edit_file again."
+        )
+
+    if old_str == "":
+        raise ValueError("old_str cannot be empty. To write a whole file, use wrtie_file instead")
+
+    count = path.read_text(encoding="utf-8").count(old_str)
+    if count == 0:
+        raise ValueError(f"old_str not found in '{filename}'. Use read_file to check the exact text")
+    if count > 1:
+        raise ValueError(
+            f"old_str found {count} times in '{filename}'."
+            " Include more surrounding text so it matches exactly once"
+        )
+    
+    return path
+
+def edit_file(filename:str, old_str: str, new_str:str) -> str:
+    """Edit a text file in the sandbox by replacing one exact piece of text.
+
+    old_str must appear in the file exactly once. If it is not found, or found
+    more than once, the edit fails. When it appears more than once, include
+    more surrounding text in old_str so it becomes unique.
+    Read the file with read_file first so old_str matches exactly.
+
+    Args:
+        filename: Name of the file inside the sandbox folder, e.g. "notes.txt"
+        old_str: The exact text to replace, including spaces and line breaks
+        new_str: The new text to put in its place
+
+    Returns:
+        A confirmation message
+    """
+    path = check_edit(filename, old_str, new_str)
+    content = path.read_text(encoding="utf-8")
+    path.write_text(content.replace(old_str, new_str, 1), encoding="utf-8")
+    return f"Edited '{filename}': replaced 1 occurrence"
+
 available_tools = {
     "get_weather": get_weather,
     "calculate": calculate,
     "read_file": read_file,
     "write_file": write_file,
     "list_files":list_files,
+    "edit_file":edit_file,
 }
 
+PRECHECKS = {
+    "edit_file": check_edit,
+}
 
 def main():
     messages = [
@@ -194,15 +253,16 @@ def main():
             "content": (
                 "你是查天气的助手，可以调用 get_weather 和 calculate 两个工具。另外你还可以读取sandbox里的文件使用 read_file 工具\n"
                 "你现在还可以调用write_file来写文件还有list_files来查看文件夹里面有什么文件\n"
+                "你还可以修改文件内容使用 edit_file 工具不过在edit_file之前你必须调用read_file先。只有在要写整个新文件才用write_file\n"
                 "get_weather可以用unit参数直接回传celsius 或 fahrenheit\n"
                 '用户要华氏度时，调用 get_weather 并传 unit="fahrenheit", 不要自己换算。\n'
                 "其他数学计算一律使用 calculate 工具\n"
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content":"What's in my notes file?"},
+        {"role": "user", "content":"In my notes, change eggs to bread"},
     ]
-    tools = [get_weather, calculate, read_file, write_file,list_files]
+    tools = [get_weather, calculate, read_file, write_file,list_files,edit_file]
 
     step = 0
     while step < MAX_STEPS:
@@ -220,14 +280,20 @@ def main():
 
         for call in response.message.tool_calls:
             name = call.function.name
+            arguments = call.function.arguments
             function = available_tools.get(name)
 
             if function is None:
                 result = f"Error: unknown tool '{name}'"
-            elif name in NEEDS_APPROVAL and not ask_human(name, call.function.arguments):
-                result = "Error: the user denied this action. Do not retry it. Ask the user what they want instead."
             else:
                 try:
+                    if name in PRECHECKS:
+                        PRECHECKS[name](**arguments)
+
+                    if name in NEEDS_APPROVAL and not ask_human(name, arguments):
+                        print(f"\nStopped: you denied {name}({arguments}). Nothing was changed.")
+                        return
+                    
                     result = function(**call.function.arguments)
                 except Exception as e:
                     result = f"Error: {e}"

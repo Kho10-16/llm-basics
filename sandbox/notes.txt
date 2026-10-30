@@ -1,1 +1,4 @@
-cat
+   Shopping list:
+   - milk
+   - bread
+   - rice
