@@ -2,10 +2,27 @@ import httpx
 from typing import Literal
 from ollama import chat
 from pathlib import Path
+import time
+import random
+
+MAX_RETRIES = 3
+RETRY_STATUS = {429, 500, 502, 503, 504}
 
 SANDBOX = Path("sandbox").resolve()
 # resolve() 会把相对路径变成完整的真实路劲
 MAX_STEPS = 10
+
+def chat_with_retry(messages, tools):
+    for attempt in range(MAX_RETRIES):
+        try:
+            return chat(model='qwen3:8b', messages=messages, tools=tools)
+        except ConnectionError as e:
+            if attempt == MAX_RETRIES - 1:
+                raise
+            delay = 2 ** attempt + random.uniform(0,1)
+            # random.uniform(0,1) = jitter （随机 0-1秒）
+            print(f"[retry] {e} -> waiting {delay:.1f}s")
+            time.sleep(delay)
 
 def read_file(filename:str) -> str:
     """Read a text file from the sandbox folder.
@@ -38,6 +55,7 @@ def get_weather(
     Returns:
         The current air temperature 2 meters above ground, in the requested unit.
     """
+    # url = "https://httpbin.org/status/503"
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": latitude,
@@ -45,10 +63,30 @@ def get_weather(
         "current": "temperature_2m",
         "temperature_unit": unit,
     }
-    response = httpx.get(url, params=params)
-    response.raise_for_status()
-    data = response.json()
-    return data["current"]["temperature_2m"]
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = httpx.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            return data['current']['temperature_2m']
+        except httpx.HTTPStatusError as e:
+            # 由 raise_for_status() 回应
+            # 如果不是2xx成功码就丢出
+            # 带有 .request 和 .response 属性
+            if e.response.status_code not in RETRY_STATUS:
+                raise
+            if attempt == MAX_RETRIES - 1:
+                raise
+            reason = f'HTTP {e.response.status_code}'
+        except httpx.TransportError as e:
+            # 根本没拿到回应， 例如断网， 超时或者各种error
+            if attempt == MAX_RETRIES - 1:
+                raise
+            reason = type(e).__name__
+            # 取得错误的类别名称
+        delay = 2 ** attempt + random.uniform(0,1)
+        print(f"[retry] get_weather: {reason} -> waiting {delay:.1f}s")
+        time.sleep(delay)
 
 
 # Literal 只会是其中的这几个
@@ -96,7 +134,7 @@ def main():
                 "回答时要注明单位，用纯文字回答，不要用LaTex"
             ),
         },
-        {"role": "user", "content": "What is written in notes.txt?"},
+        {"role": "user", "content": "古晋现在的天气"},
     ]
     tools = [get_weather, calculate, read_file]
 
@@ -104,7 +142,7 @@ def main():
     while step < MAX_STEPS:
         step += 1    
         print(f"--- step {step} ---")
-        response = chat(model="qwen3:8b", messages=messages, tools=tools)
+        response = chat_with_retry(messages, tools)
         messages.append(response.message)
 
         if not response.message.tool_calls:
